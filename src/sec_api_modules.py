@@ -23,9 +23,7 @@ def fetch_cik_data() -> dict:
     raise ConnectionError(f"Failed to fetch ticker data: {response.status_code}")
 
 
-def search_company_by_name(
-    search_term: str, cik_data: dict, limit=5
-) -> List[dict]:
+def search_company_by_name(search_term: str, cik_data: dict, limit=5) -> List[dict]:
     """
     Perform a fuzzy search on company names to find the closest matches.
 
@@ -33,10 +31,9 @@ def search_company_by_name(
     - search_term (str): The user's search query.
     - cik_data (dict): Dictionary of ticker data from the SEC.
     - limit (int): Maximum number of results to return.
-    - threshold (int): Minimum similarity score to include in results.
 
     Returns:
-    - List of matched companies with their ticker, CIK, and similarity score.
+    - List of matched companies with their name and score.
     """
     search_term = search_term.lower()
     company_names = list(cik_data.keys())
@@ -45,15 +42,30 @@ def search_company_by_name(
     for company_name in company_names:
         normalized = company_name.lower()
         if search_term == normalized:
-            results.append({"name": company_name, "score": 101.00})
+            results.append(
+                {
+                    "name": company_name,
+                    "score": 101.00,
+                    "cik": cik_data[company_name]["cik"],
+                }
+            )
         elif normalized.startswith(search_term):
-            results.append({"name": company_name, "score": 100.00})
+            results.append(
+                {
+                    "name": company_name,
+                    "score": 100.00,
+                    "cik": cik_data[company_name]["cik"],
+                }
+            )
 
     exact_names = [result["name"] for result in results]
     matches = process.extract(
         search_term, company_names, scorer=fuzz.token_ratio, limit=limit
     )
-    transformed_matches = [{"name": match[0], "score": match[1]} for match in matches]
+    transformed_matches = [
+        {"name": match[0], "score": match[1], "cik": cik_data[match[0]]["cik"]}
+        for match in matches
+    ]
     transformed_matches = (
         list(
             filter(lambda entry: entry["name"] not in exact_names, transformed_matches)
