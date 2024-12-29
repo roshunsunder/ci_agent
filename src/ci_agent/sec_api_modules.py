@@ -16,7 +16,10 @@ def fetch_cik_data() -> dict:
     if response.status_code == 200:
         data = response.json()
         cik_data = {
-            entry["title"]: {"cik": str(entry["cik_str"]), "ticker": entry["ticker"]}
+            entry["title"]: {
+                "cik": str(entry["cik_str"]).zfill(10),
+                "ticker": entry["ticker"],
+            }
             for entry in data.values()
         }
         return cik_data
@@ -45,7 +48,7 @@ def search_company_by_name(search_term: str, cik_data: dict, limit=5) -> List[di
             results.append(
                 {
                     "name": company_name,
-                    "score": 101.00,
+                    "_score": 101.00,
                     "cik": cik_data[company_name]["cik"],
                 }
             )
@@ -53,7 +56,7 @@ def search_company_by_name(search_term: str, cik_data: dict, limit=5) -> List[di
             results.append(
                 {
                     "name": company_name,
-                    "score": 100.00,
+                    "_score": 100.00,
                     "cik": cik_data[company_name]["cik"],
                 }
             )
@@ -63,7 +66,7 @@ def search_company_by_name(search_term: str, cik_data: dict, limit=5) -> List[di
         search_term, company_names, scorer=fuzz.token_ratio, limit=limit
     )
     transformed_matches = [
-        {"name": match[0], "score": match[1], "cik": cik_data[match[0]]["cik"]}
+        {"name": match[0], "_score": match[1], "cik": cik_data[match[0]]["cik"]}
         for match in matches
     ]
     transformed_matches = (
@@ -72,6 +75,6 @@ def search_company_by_name(search_term: str, cik_data: dict, limit=5) -> List[di
         )
         + results
     )
-    transformed_matches.sort(key=lambda entry: entry["score"], reverse=True)
+    transformed_matches.sort(key=lambda entry: entry["_score"], reverse=True)
 
     return transformed_matches
