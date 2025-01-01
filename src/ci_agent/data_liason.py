@@ -73,7 +73,7 @@ class DataLiason:
             'ITEM_15_EXHIBITS_AND_FINANCIAL_STATEMENT_SCHEDULES': get_10K_Item15_Exhibits_and_Financial_Statement_Schedules,
         }
     
-    def _do_RAG(self, chunks: List[str], query: str, top_k:int = 2) -> List[str]:
+    def _do_RAG(self, chunks: List[str], query: str, top_k:int = 1) -> List[str]:
         # Encode query and paragraphs
         query_embedding = self.embedding_model.encode(query, convert_to_tensor=True)
         chunk_embeddings = self.embedding_model.encode(chunks, convert_to_tensor=True)
@@ -81,7 +81,6 @@ class DataLiason:
         # Compute cosine similarity
         similarities = util.cos_sim(query_embedding, chunk_embeddings)
 
-        # Retrieve the top 2 most relevant paragraphs
         top_results = similarities.argsort(descending=True)[0][:top_k]
         return [chunks[i] for i in top_results]
     
@@ -97,7 +96,7 @@ class DataLiason:
             raise ValueError(f"Unknown section: {section_name}")
         # Retrieve the section content
         section_content = self.tenk_functions[section_name](tenk)
-        if rag_query is not None:
+        if rag_query is not None and len(rag_query) > 0:
             section_content = str(self._do_RAG(
                 list(section_content.split('\n\n')),
                 rag_query
@@ -146,18 +145,4 @@ class DataLiason:
             return response.choices[0].message.content
         except Exception as e:
             raise Exception(f"Error calling LLM: {str(e)}")
-
-
-if __name__ == "__main__":
-    c = config_and_set_company('MSFT')
-    tenk = get_latest_10K(c)
-    load_dotenv()
-    client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-    dl = DataLiason(client)
-    res = dl.analyze_10K_section_helper(
-        tenk,
-        "ITEM_01_BUSINESS",
-        "Determine if company has significant advantages in AI."
-    )
-    print(res)
 
