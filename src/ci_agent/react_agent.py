@@ -24,19 +24,19 @@ class ReActAgent:
             {
                 "type": "function",
                 "function": {
-                    "name": "analyze_10K_section",
-                    "description": "Call this function if you want to access the company's 10K. Denoting a section will simply return the parsed text of the 10K document, which you can filter by using a search query.",
+                    "name": "get_10K_section",
+                    "description": "Retrieve and filter text from a specific section of the company's 10K filing. Use this to extract relevant information about the company.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "section": {
                                 "type": "string",
                                 "enum" : ['ITEM_01_BUSINESS', 'ITEM_1A_RISK_FACTORS', 'ITEM_1B_UNRESOLVED_STAFF_COMMENTS', 'ITEM_1C_CYBERSECURITY', 'ITEM_02_PROPERTIES', 'ITEM_03_LEGAL_PROCEEDINGS', 'ITEM_04_MINE_SAFETY_DISCLOSURES', 'ITEM_05_MARKET', 'ITEM_06_CONSOLIDATED_FINANCIAL_DATA', 'ITEM_07_MGMT_DISCUSSION_AND_ANALYSIS', 'ITEM_7A_MARKET_RISKS', 'ITEM_08_FINANCIAL_STATEMENTS', 'ITEM_09_CHANGES_IN_ACCOUNTANTS', 'ITEM_9A_CONTROLS_AND_PROCEDURES', 'ITEM_9B_OTHER_INFORMATION', 'ITEM_10_DIRECTORS_EXECUTIVE_OFFICERS_AND_GOVERNANCE', 'ITEM_11_EXECUTIVE_COMPENSATION', 'ITEM_12_SECURITY_OWNERSHIP', 'ITEM_13_RELATED_TRANSACTIONS_AND_DIRECTOR_INDEPENDENCE', 'ITEM_14_PRINCIPAL_ACCOUNTING_FEES_AND_SERVICES', 'ITEM_15_EXHIBITS_AND_FINANCIAL_STATEMENT_SCHEDULES'],
-                                "description" : "This is an enum value to choose which section of the 10K you'd like to access."
+                                "description" : "The specific section of the 10K to retrieve, such as ITEM_1A_RISK_FACTORS for risk factors or ITEM_07_MGMT_DISCUSSION_AND_ANALYSIS for management discussion. Use these enums to target a specific area of the filing."
                                 },
                             "rag_query" : {
                                 "type": "string",
-                                "description" : "This is a search query that, using vector similarity, filters which paragraphs you receive from the raw text of the 10K Item that you denoted with the `section` parameter."
+                                "description" : "A keyword or phrase to filter content within the specified section. For example, if analyzing ITEM_1A_RISK_FACTORS, you might use 'regulatory risk' to find paragraphs discussing regulatory challenges."
                             }
                         },
                     },
@@ -47,13 +47,13 @@ class ReActAgent:
                 "type" : "function",
                 "function" : {
                     "name" : "finish",
-                    "description" : "This function is only to be called when you have gotten the final answer for the question asked to you or if it has taken more than 3 steps to answer the question. This will end the chain of thought.",
+                    "description" : "Conclude the reasoning process and provide the final answer to the question. Use this after synthesizing information from previous steps. The final answer should be clear, concise, and include reasoning and references to the 10K sections analyzed. Only call this function if you are confident the question has been answered completely or if the maximum step limit has been reached.",
                     "parameters" : {
                         "type" : "object",
                         "properties" : {
                             "final_answer": {
                                 "type" : "string",
-                                "description" : "This should be the final answer to the overall question. Here, you must use the history of the chat to succintly provide the answer, including a description of which sources were used to inform said answer."
+                                "description" : "The complete and final response to the original question. This should summarize key insights, include reasoning, and explicitly reference the relevant 10K sections (e.g., 'Based on ITEM_1A_RISK_FACTORS and ITEM_7A_MARKET_RISKS, the top three risks are...'). Ensure the response is concise and directly addresses the query."
                             }
                         }
                     }
@@ -61,26 +61,18 @@ class ReActAgent:
             }
         ]
         self.react_prompt = f"""
-        You are an expert in company analysis, be it financial, strategic or otherwise. Your job is to follow a procedure to answer the question or task that is given to you regarding a particular company, to the best of your ability.
+        You are a financial analyst specializing in company filings. Your goal is to analyze the 10-K form and answer questions precisely and efficiently.
 
-        To assist with this procedure, you have the following tools:
-        {self.tools}
+        You have access to two tools:
+        1. `get_10K_section`: Retrieve and filter text from a specific section of the latest 10-K document. Use this when specific insights from the filing are required.
+        2. `finish`: End the process once you have a complete answer, summarizing your reasoning and citing which 10-K sections informed your answer.
 
-        **** PROCEDURE DESCRIPTION ****
-        The procedure follows the following format.
-
-        - Thought: think about what to do next
-        - Action: the action to take, should be one of the aforementioned tools.
-        - Observation: The result of the action.
-        ... (this Thought/Action/Observation can repeat up to {MAX_STEPS} times. You should try, however, to reach the final answer in as few steps as possible.)
-        - Thought: I now know the final answer
-        - Final Answer: the final answer to the original input question
-
-        Always work one step at a time (step being Thought, Action, or Observation). The idea is that we break the problem down into steps. Sometimes, \\
-        a question may be simple enough that it can be answered in one cycle.
-
-        **** END OF PROCEDURE DESCRIPTION ****
-
+        *** PROCEDURE ***
+        Follow this structured approach:
+        - Thought: Reflect on the question and decide the next step.
+        - Action: Use one of the tools to gather information or conclude the process.
+        - Observation: Record the result of the action and use it to inform the next step.
+        - Repeat up to {MAX_STEPS} times or until the answer is complete.
         """.strip()
         self.messages = []
         self.dl = DataLiason(llm_client=data_analysis_client)
@@ -90,7 +82,7 @@ class ReActAgent:
             raise ValueError("No 10-K was found for this company")
 
         self.tool_mappings = {
-            "analyze_10K_section"  : self.analyze_10K_section_wrapper,
+            "get_10K_section"  : self.analyze_10K_section_wrapper,
             "finish" : self.finish
         }
     
@@ -133,7 +125,7 @@ class ReActAgent:
                 print(">>>>>>>>>> FUNCTION ARGS: ", tool_call.function.arguments)
                 if tool_call.function.name == "final":
                     return
-                self.messages.append({"role":"system", "content":f"OBSERVATION: {res}"})
+                self.messages.append({"role":"system", "content":f"Observation from `{tool_call.function.name}`: {res}"})
         print("MAX ITERATIONS REACHED")
         print(self.messages)
 
@@ -145,5 +137,5 @@ class ReActAgent:
         exit(0)
 
 if __name__ == "__main__":
-    ra = ReActAgent('MSFT', OpenAI(api_key=os.getenv('OPENAI_API_KEY')))
-    ra.invoke("Based on the risk factors section, what are the top three risks that could impact the company’s financial performance?")
+    ra = ReActAgent('AAPL', OpenAI(api_key=os.getenv('OPENAI_API_KEY')))
+    ra.invoke("What initiatives are highlighted under Corporate Social Responsibility (CSR), and how do they align with the company’s business goals?")
