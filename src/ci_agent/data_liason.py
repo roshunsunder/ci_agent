@@ -6,8 +6,6 @@ import os
 from typing import List, Optional
 from dotenv import load_dotenv
 from edgar_data_modules import (
-    config_and_set_company,
-    get_latest_10K,
     get_10K_Item1_Business,
     get_10K_Item1A_Risk_Factors,
     get_10K_Item1B_Unresolved_Staff_Comments,
@@ -29,6 +27,9 @@ from edgar_data_modules import (
     get_10K_Item13_Related_Transactions_and_Director_Independence,
     get_10K_Item14_Principal_Accounting_Fees_and_Services,
     get_10K_Item15_Exhibits_and_Financial_Statement_Schedules,
+    get_10K_balance_sheet,
+    get_10K_income_statement,
+    get_10K_cash_flow
 )
 from openai import OpenAI
 from sentence_transformers import SentenceTransformer, util
@@ -72,6 +73,12 @@ class DataLiason:
             'ITEM_14_PRINCIPAL_ACCOUNTING_FEES_AND_SERVICES': get_10K_Item14_Principal_Accounting_Fees_and_Services,
             'ITEM_15_EXHIBITS_AND_FINANCIAL_STATEMENT_SCHEDULES': get_10K_Item15_Exhibits_and_Financial_Statement_Schedules,
         }
+
+        self.tenk_financial_functions = {
+            'BALANCE_SHEET' : get_10K_balance_sheet,
+            'INCOME_STATEMENT' : get_10K_income_statement,
+            'CASH_FLOW' : get_10K_cash_flow
+        }
     
     def _do_RAG(self, chunks: List[str], query: str, top_k:int = 1) -> List[str]:
         # Encode query and paragraphs
@@ -105,44 +112,16 @@ class DataLiason:
         # TODO: Add LLM analysis
 
         return section_content
-    
-    def _analyze_10K_section_with_llm(
-        self,
-        section_content: str,
-        context: str,
-        overall_goal: str,
-        section_description: str,
-        max_tokens: int = 500,
-    ):
-        """
-        Internal method for analyzing 10K sections
-        """
-        prompt = f"""
-        Context: {context}
-        Overall Goal: {overall_goal}
-        Section: {section_description}
         
-        Based on the context and goal above, analyze this {section_description} and
-        extract only the most relevant information:
-
-        **** SECTION CONTENT ****
-        {section_content}
-        **** END OF SECTION CONTENT ****
-        
-        Provide a concise analysis focusing only on information that directly relates
-        to the context and goal. Ignore irrelevant details.
-        """.strip()
-
-        try:
-            response = self.llm_client.chat.completions.create(
-                model="gpt-4-turbo",
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0,
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            raise Exception(f"Error calling LLM: {str(e)}")
+    def analyze_10K_finances_helper(
+            self,
+            tenk,
+            section_name: str,
+    ) -> str:
+        """Agent-facing helper function"""
+        if section_name not in self.tenk_financial_functions:
+            raise ValueError(f"Unknown section: {section_name}")
+        # Retrieve the section content
+        section_content = self.tenk_financial_functions[section_name](tenk)
+        return section_content
 
