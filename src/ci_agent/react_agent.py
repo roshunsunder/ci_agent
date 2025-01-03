@@ -1,6 +1,8 @@
 """Agent that handles the ReACT CoT"""
 import os
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 from openai import OpenAI
 from data_liason import DataLiason
 from edgar_data_modules import (
@@ -14,11 +16,49 @@ load_dotenv()
 
 MAX_STEPS = 5
 
+def setup_logger(name: str, log_file: str = 'react_agent.log', level=logging.INFO):
+    """Configure logger with both file and console handlers"""
+    # Create logger
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+
+    # Prevent adding handlers multiple times
+    if logger.handlers:
+        return logger
+
+    # Create formatters
+    file_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    console_formatter = logging.Formatter(
+        '%(levelname)s - %(message)s'
+    )
+
+    # File handler (rotating to keep log size manageable)
+    file_handler = RotatingFileHandler(
+        log_file, maxBytes=10*1024*1024, backupCount=5
+    )
+    file_handler.setFormatter(file_formatter)
+    file_handler.setLevel(level)
+
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(console_formatter)
+    console_handler.setLevel(level)
+
+    # Add handlers to logger
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    return logger
+
 class ReActAgent:
     def __init__(self, company_ticker_or_cik, data_analysis_client):
+        self.logger = setup_logger(self.__class__.__name__)
         self.llm_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.company = config_and_set_company(company_ticker_or_cik)
         if self.company is None:
+            self.logger.error(f"Company not found for ticker/CIK: {company_ticker_or_cik}")
             raise ValueError(f"Couldn't find a company for ticker/CIK: {company_ticker_or_cik}")
         self.tools =[
             {
@@ -31,9 +71,9 @@ class ReActAgent:
                         "properties": {
                             "section": {
                                 "type": "string",
-                                "enum" : ['ITEM_01_BUSINESS', 'ITEM_1A_RISK_FACTORS', 'ITEM_1B_UNRESOLVED_STAFF_COMMENTS', 'ITEM_1C_CYBERSECURITY', 'ITEM_02_PROPERTIES', 'ITEM_03_LEGAL_PROCEEDINGS', 'ITEM_04_MINE_SAFETY_DISCLOSURES', 'ITEM_05_MARKET', 'ITEM_06_CONSOLIDATED_FINANCIAL_DATA', 'ITEM_07_MGMT_DISCUSSION_AND_ANALYSIS', 'ITEM_7A_MARKET_RISKS', 'ITEM_08_FINANCIAL_STATEMENTS', 'ITEM_09_CHANGES_IN_ACCOUNTANTS', 'ITEM_9A_CONTROLS_AND_PROCEDURES', 'ITEM_9B_OTHER_INFORMATION', 'ITEM_10_DIRECTORS_EXECUTIVE_OFFICERS_AND_GOVERNANCE', 'ITEM_11_EXECUTIVE_COMPENSATION', 'ITEM_12_SECURITY_OWNERSHIP', 'ITEM_13_RELATED_TRANSACTIONS_AND_DIRECTOR_INDEPENDENCE', 'ITEM_14_PRINCIPAL_ACCOUNTING_FEES_AND_SERVICES', 'ITEM_15_EXHIBITS_AND_FINANCIAL_STATEMENT_SCHEDULES'],
+                                "enum" : ['ITEM_01_BUSINESS', 'ITEM_1A_RISK_FACTORS', 'ITEM_1B_UNRESOLVED_STAFF_COMMENTS', 'ITEM_1C_CYBERSECURITY', 'ITEM_02_PROPERTIES', 'ITEM_03_LEGAL_PROCEEDINGS', 'ITEM_04_MINE_SAFETY_DISCLOSURES', 'ITEM_05_MARKET', 'ITEM_06_CONSOLIDATED_FINANCIAL_DATA', 'ITEM_07_MGMT_DISCUSSION_AND_ANALYSIS', 'ITEM_7A_MARKET_RISKS', 'ITEM_09_CHANGES_IN_ACCOUNTANTS', 'ITEM_9A_CONTROLS_AND_PROCEDURES', 'ITEM_9B_OTHER_INFORMATION', 'ITEM_10_DIRECTORS_EXECUTIVE_OFFICERS_AND_GOVERNANCE', 'ITEM_11_EXECUTIVE_COMPENSATION', 'ITEM_12_SECURITY_OWNERSHIP', 'ITEM_13_RELATED_TRANSACTIONS_AND_DIRECTOR_INDEPENDENCE', 'ITEM_14_PRINCIPAL_ACCOUNTING_FEES_AND_SERVICES'],
                                 "description" : "The specific section of the 10K to retrieve, such as ITEM_1A_RISK_FACTORS for risk factors or ITEM_07_MGMT_DISCUSSION_AND_ANALYSIS for management discussion. Use these enums to target a specific area of the filing."
-                                },
+                            },
                             "rag_query" : {
                                 "type": "string",
                                 "description" : "A keyword or phrase to filter content within the specified section. For example, if analyzing ITEM_1A_RISK_FACTORS, you might use 'regulatory risk' to find paragraphs discussing regulatory challenges."
@@ -41,6 +81,24 @@ class ReActAgent:
                         },
                     },
                     "required" : ["section", "rag_query"]
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_10K_financial_statement",
+                    "description": "Retrieve a financial statement from the 10K filing in markdown format. Use this when information is needed from the balance sheet, income statement, or cash flow statement.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "statement": {
+                                "type": "string",
+                                "enum" : ['BALANCE_SHEET', 'INCOME_STATEMENT', 'CASH_FLOW'],
+                                "description" : "The specific financial statement from the 10K to retrieve"
+                            }
+                        },
+                    },
+                    "required" : ["statement"]
                 }
             },
             {
@@ -65,11 +123,12 @@ class ReActAgent:
 
         You have access to two tools:
         1. `get_10K_section`: Retrieve and filter text from a specific section of the latest 10-K document. Use this when specific insights from the filing are required.
+        2. `get_10K_financial_statement`: Retrieve cash flow, income statement, or balance sheet from the 10K.
         2. `finish`: End the process once you have a complete answer, summarizing your reasoning and citing which 10-K sections informed your answer.
 
         *** PROCEDURE ***
         Follow this structured approach:
-        - Thought: Reflect on the question and decide the next step.
+        - Thought: Reflect on the question and decide the next step. THIS IS A MANDATORY STEP AND CANNOT BE SKIPPED.
         - Action: Use one of the tools to gather information or conclude the process.
         - Observation: Record the result of the action and use it to inform the next step.
         - Repeat up to {MAX_STEPS} times or until the answer is complete.
@@ -79,21 +138,47 @@ class ReActAgent:
 
         self.company_tenk = get_latest_10K(self.company)
         if self.company_tenk is None:
+            self.logger.error(f"No 10-K found for company: {self.company}")
             raise ValueError("No 10-K was found for this company")
+        
+        self.logger.info(f"Successfully initialized ReActAgent for company: {self.company}")
 
         self.tool_mappings = {
             "get_10K_section"  : self.analyze_10K_section_wrapper,
+            "get_10K_financial_statement" : self.get_10K_financial_statement_wrapper,
             "finish" : self.finish
         }
     
     def analyze_10K_section_wrapper(self, section: str, rag_query: str = None) -> str:
-        return self.dl.analyze_10K_section_helper(
-            tenk=self.company_tenk, 
-            section_name=section,
-            rag_query=rag_query,
-        )
+        self.logger.info(f"Analyzing 10-K section: {section} with query: {rag_query}")
+        try:
+            result = self.dl.analyze_10K_section_helper(
+                tenk=self.company_tenk, 
+                section_name=section,
+                rag_query=rag_query,
+            )
+            self.logger.debug(f"Successfully analyzed section {section}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error analyzing section {section}: {str(e)}")
+            raise
+    
+    def get_10K_financial_statement_wrapper(self, statement: str) -> str:
+        self.logger.info(f"Retrieving {statement} from 10-K")
+        try:
+            result = self.dl.analyze_10K_finances_helper(
+                tenk = self.company_tenk,
+                section_name=statement
+            )
+            self.logger.debug(f"Successfully analyzed {statement}")
+            self.logger.debug(f"Function Result: {result}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Error analyzing section {statement}: {str(e)}")
+            raise
 
     def invoke(self, query):
+        self.logger.info(f"Starting analysis for query: {query}")
         self.react_prompt += f"""
         **** BEGIN PROCEDURE ****
         Question: {query}
@@ -101,41 +186,64 @@ class ReActAgent:
         self.messages.append({"role": "system", "content":self.react_prompt})
 
         for i in range(MAX_STEPS * 2):
-            response = self.llm_client.chat.completions.create(
-                model="gpt-4-turbo",
-                messages=self.messages,
-                tools=self.tools
-            )
-            # check if empty content
-            response_message = response.choices[0].message.content
-            response_tool_calls = response.choices[0].message.tool_calls
-            if response_message is None and response_tool_calls is not None:
-                self.messages.append({
-                    "role":"assistant", 
-                    "content":f"Action: {response_tool_calls[0].function.name}({response_tool_calls[0].function.arguments})"
-                })
-            else:
-                self.messages.append({"role":"assistant", "content":response_message})
-            print(">>>>>>>>>> LLM IDEA: ", response.choices[0].message.content)
-            if response.choices[0].message.tool_calls:
-                tool_call = response.choices[0].message.tool_calls[0]
-                fn = self.tool_mappings[tool_call.function.name]
-                print(">>>>>>>>>> FUNCTION CALL: ", tool_call.function.name)
-                res = fn(**json.loads(tool_call.function.arguments))
-                print(">>>>>>>>>> FUNCTION ARGS: ", tool_call.function.arguments)
-                if tool_call.function.name == "final":
-                    return
-                self.messages.append({"role":"system", "content":f"Observation from `{tool_call.function.name}`: {res}"})
-        print("MAX ITERATIONS REACHED")
-        print(self.messages)
+            self.logger.debug(f"Starting iteration {i+1}/{MAX_STEPS * 2}")
+            
+            try:
+                response = self.llm_client.chat.completions.create(
+                    model="gpt-4-turbo",
+                    messages=self.messages,
+                    tools=self.tools
+                )
+                
+                response_message = response.choices[0].message.content
+                response_tool_calls = response.choices[0].message.tool_calls
+                
+                if response_message is None and response_tool_calls is not None:
+                    self.logger.info(f"ON ITERATION {i}, ONLY TOOL CALL WAS USED")
+                    tool_call_content = f"Action: {response_tool_calls[0].function.name}({response_tool_calls[0].function.arguments})"
+                    self.messages.append({
+                        "role": "assistant",
+                        "content": tool_call_content
+                    })
+                    self.logger.info(f"LLM action: {tool_call_content}")
+                else:
+                    self.logger.info(f"ON ITERATION {i}, THOUGHT WAS USED")
+                    self.messages.append({"role": "assistant", "content": response_message})
+                    self.logger.info(f"LLM thought: {response_message}")
+
+                if response_tool_calls:
+                    self.logger.info(f"ON ITERATION {i}, TOOL CALLS WAS USED")
+                    tool_call = response_tool_calls[0]
+                    fn = self.tool_mappings[tool_call.function.name]
+                    self.logger.info(f"Executing function: {tool_call.function.name}")
+                    self.logger.debug(f"Function arguments: {tool_call.function.arguments}")
+                    
+                    res = fn(**json.loads(tool_call.function.arguments))
+                    
+                    if tool_call.function.name == "finish":
+                        self.logger.info("Analysis completed successfully")
+                        return
+                        
+                    self.messages.append({
+                        "role": "system",
+                        "content": f"Observation from `{tool_call.function.name}`: {res}"
+                    })
+                    
+            except Exception as e:
+                self.logger.error(f"Error during iteration {i+1}: {str(e)}")
+                raise
+                
+        self.logger.warning(f"Maximum iterations ({MAX_STEPS * 2}) reached without completion")
+        self.logger.debug("Final message history: %s", self.messages)
 
 
     def finish(self, final_answer: str) -> str:
         # process chat history and encode as string
-        print("FINAL CALLED")
+        self.logger.info("Finishing analysis")
+        self.logger.debug(f"Final answer: {final_answer}")
         print(final_answer)
         exit(0)
 
 if __name__ == "__main__":
     ra = ReActAgent('AAPL', OpenAI(api_key=os.getenv('OPENAI_API_KEY')))
-    ra.invoke("What initiatives are highlighted under Corporate Social Responsibility (CSR), and how do they align with the company’s business goals?")
+    ra.invoke("Identify and sum the total operating expenses. Are they growing faster than revenue?")
