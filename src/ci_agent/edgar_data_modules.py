@@ -2,7 +2,7 @@
 
 import os
 from typing import List
-from edgar import Company, set_identity
+from edgar import Company, Financials, set_identity
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -124,3 +124,32 @@ def get_10K_Item14_Principal_Accounting_Fees_and_Services(tenk) -> str:
 def get_10K_Item15_Exhibits_and_Financial_Statement_Schedules(tenk) -> str:
     res = tenk["Item 15"]
     return DATA_UNAVAILABLE_STR if res is None else res
+
+def get_10K_balance_sheet(tenk) -> str:
+    financials : Financials = tenk.financials
+    bs = financials.get_balance_sheet()
+    df = bs.get_dataframe()
+    cleaned_df = df.drop('concept', axis=1, inplace=False)
+    # TODO: test if str(cleaned_df) leads to better performance
+    return cleaned_df.to_markdown()
+
+def get_10K_income_statement(tenk) -> str:
+    financials : Financials = tenk.financials
+    bs = financials.get_income_statement()
+    df = bs.get_dataframe()
+    cleaned_df = df.drop('concept', axis=1, inplace=False)
+    # TODO: test if str(cleaned_df) leads to better performance
+    return cleaned_df.to_markdown()
+
+def get_10K_cash_flow(tenk) -> str:
+    financials : Financials = tenk.financials
+    bs = financials.get_cash_flow_statement()
+    df = bs.get_dataframe()
+    cleaned_df = df.drop('concept', axis=1, inplace=False)
+    # TODO: test if str(cleaned_df) leads to better performance
+    return cleaned_df.to_markdown()
+
+if __name__ == "__main__":
+    c = config_and_set_company('AAPL')
+    tenk = get_latest_10K(c)
+    print(get_10K_cash_flow(tenk))
