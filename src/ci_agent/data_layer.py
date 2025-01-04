@@ -41,9 +41,9 @@ provided context and goal. Focus only on information that directly relates to
 the provided context and objective. Be concise but thorough in your analysis.
 """
 
-class DataLiason:
+class DataLayer:
     def __init__(self, llm_client, system_prompt: str = None):
-        """ """
+        """Initializes Data"""
         self.llm_client = llm_client
         self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')

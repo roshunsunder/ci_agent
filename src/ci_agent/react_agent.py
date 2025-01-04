@@ -4,7 +4,7 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler
 from openai import OpenAI
-from data_liason import DataLiason
+from data_layer import DataLayer
 from edgar_data_modules import (
     config_and_set_company,
     get_latest_10K
@@ -134,7 +134,7 @@ class ReActAgent:
         - Repeat up to {MAX_STEPS} times or until the answer is complete.
         """.strip()
         self.messages = []
-        self.dl = DataLiason(llm_client=data_analysis_client)
+        self.dl = DataLayer(llm_client=data_analysis_client)
 
         self.company_tenk = get_latest_10K(self.company)
         if self.company_tenk is None:
@@ -190,7 +190,7 @@ class ReActAgent:
             
             try:
                 response = self.llm_client.chat.completions.create(
-                    model="gpt-4-turbo",
+                    model="gpt-4o",
                     messages=self.messages,
                     tools=self.tools
                 )
