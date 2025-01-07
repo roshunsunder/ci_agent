@@ -163,6 +163,19 @@ class ReActAgent:
             self.logger.error(f"Error analyzing section {section}: {str(e)}")
             raise
     
+    # TODO
+    def _failsafe(self) -> str:
+        # Naked API Call
+        try:
+                response = self.llm_client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=self.messages,
+                    tools=self.tools
+                )
+        except Exception as e:
+            # Catastrophic failure
+            raise
+    
     def get_10K_financial_statement_wrapper(self, statement: str) -> str:
         self.logger.info(f"Retrieving {statement} from 10-K")
         try:
@@ -177,7 +190,7 @@ class ReActAgent:
             self.logger.error(f"Error analyzing section {statement}: {str(e)}")
             raise
 
-    def invoke(self, query):
+    def invoke(self, query) -> int:
         self.logger.info(f"Starting analysis for query: {query}")
         self.react_prompt += f"""
         **** BEGIN PROCEDURE ****
@@ -222,7 +235,7 @@ class ReActAgent:
                     
                     if tool_call.function.name == "finish":
                         self.logger.info("Analysis completed successfully")
-                        return
+                        return res
                         
                     self.messages.append({
                         "role": "system",
@@ -231,18 +244,19 @@ class ReActAgent:
                     
             except Exception as e:
                 self.logger.error(f"Error during iteration {i+1}: {str(e)}")
-                raise
+                return self._failsafe()
                 
         self.logger.warning(f"Maximum iterations ({MAX_STEPS * 2}) reached without completion")
+        self.logger.warning(f"Entering failsafe procedure")
         self.logger.debug("Final message history: %s", self.messages)
+        return self._failsafe()
 
 
     def finish(self, final_answer: str) -> str:
         # process chat history and encode as string
         self.logger.info("Finishing analysis")
         self.logger.debug(f"Final answer: {final_answer}")
-        print(final_answer)
-        exit(0)
+        return final_answer
 
 if __name__ == "__main__":
     ra = ReActAgent('AAPL', OpenAI(api_key=os.getenv('OPENAI_API_KEY')))
