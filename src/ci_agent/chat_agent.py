@@ -16,7 +16,7 @@ class ChatResponse(BaseModel):
 
 class UIAgent:
     def __init__(self, company_ticker_or_cik):
-        self.llm_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.agent = ReActAgent(company_ticker_or_cik, OpenAI(api_key=os.getenv('OPENAI_API_KEY')))
         self.system_prompt = f"""
         You are a helpful chatbot that helps users derive competitive intelligence on a particular company.
@@ -24,7 +24,7 @@ class UIAgent:
 
         You have one tool at your disposal: an AI agent that has access to the company's 10-K, which is able to answer questions and do tasks. You should call this agent when the question the user is asking cannot (or should not) be answered without referencing the information found in the 10-K form. If the question can be answered without it, for example if the user is asking for clarification/elaboration, then do not call the agent.
 
-        If you do decide to call this agent, you need to provide it a specific task, or ask it an answerable question.
+        If you do decide to call this agent, you need to provide it a specific task, or ask it an answerable question. If what the user is asking is too broad, it is YOUR job to ask them questions to narrow their focus.
         """.strip()
 
         self.chat_history = [{"role": "system", "content": self.system_prompt}]
@@ -36,8 +36,38 @@ class UIAgent:
     
     def _handle_chat_response(self, completion):
         chat_response : ChatResponse = completion.choices[0].message.parsed
+        self.chat_history.append(
+                {
+                    "role" : "assistant",
+                    "content" : chat_response.response_text
+                }
+            )
         if chat_response.call_agent:
-            self.agent.invoke(chat_response.agent_request_if_call_agent_true)
+            print(">>>>>> Loading...")
+            agent_response = self.agent.invoke(chat_response.agent_request_if_call_agent_true)
+            self.chat_history.append(
+                {
+                    "role" : "system",
+                    "content" : f"*** AGENT RESPONSE ***\n{agent_response}"
+                }
+            )
+
+            update = self.client.beta.chat.completions.parse(
+                model="gpt-4o",
+                messages=self.chat_history,
+                response_format=ChatResponse,
+            )
+            update_cr = update.choices[0].message.parsed
+            if update_cr:
+                self.chat_history.append(
+                    {
+                        "role" : "assistant",
+                        "content" : update_cr.response_text
+                    }
+                )
+            else:
+                raise RuntimeError("interface agent failed to get a chat response after research agent returned")
+            
             
 
     
@@ -47,13 +77,13 @@ class UIAgent:
             self._add_user_message(user_input)
             completion = self.client.beta.chat.completions.parse(
                 model="gpt-4o",
-                messages=self.chat_history
+                messages=self.chat_history,
                 response_format=ChatResponse,
             )
             self._handle_chat_response(completion)
+            print([message for message in self.chat_history if message["role"] != "system"][-1]["content"])
 
 
-event = completion.choices[0].message.parsed
-print(event)
-print(type(event))
-print(event.response_text)
+if __name__ == "__main__":
+    bob = UIAgent('CRM')
+    bob.chat()

@@ -3,6 +3,7 @@ import os
 import json
 import logging
 from logging.handlers import RotatingFileHandler
+import tiktoken
 from openai import OpenAI
 from data_layer import DataLayer
 from edgar_data_modules import (
@@ -15,6 +16,11 @@ load_dotenv()
 
 
 MAX_STEPS = 5
+
+def num_tokens_from_string(string: str, model_name: str) -> int:
+    encoding = tiktoken.encoding_for_model(model_name)
+    num_tokens = len(encoding.encode(string))
+    return num_tokens
 
 def setup_logger(name: str, log_file: str = 'react_agent.log', level=logging.INFO):
     """Configure logger with both file and console handlers"""
@@ -158,6 +164,7 @@ class ReActAgent:
                 rag_query=rag_query,
             )
             self.logger.debug(f"Successfully analyzed section {section}")
+            self.logger.info(f"HERE IS THE SECTION RESULT:\n{result}")
             return result
         except Exception as e:
             self.logger.error(f"Error analyzing section {section}: {str(e)}")
@@ -202,8 +209,9 @@ class ReActAgent:
             self.logger.debug(f"Starting iteration {i+1}/{MAX_STEPS * 2}")
             
             try:
+                self.logger.info(f"ON ITERATION {i}, sending {num_tokens_from_string(str(self.messages), "gpt-4o-mini")} tokens.")
                 response = self.llm_client.chat.completions.create(
-                    model="gpt-4o",
+                    model="gpt-4o-mini",
                     messages=self.messages,
                     tools=self.tools
                 )
