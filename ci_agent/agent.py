@@ -1,6 +1,7 @@
 import json
 import os
 import datetime
+from typing import Generator, Optional, Union
 from ci_agent.models.agent_models import AgentResponse
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -110,50 +111,91 @@ class Agent:
           return f"from the dates {available_dates[0]} to {available_dates[-1]}"
 
 
-    def chat(self, message:str, streaming:bool=False):
-        self.messages.append({"role" : "user" , "content" : message})
-        response : AgentResponse = self.get_completion(self.messages, "gpt-4o", AgentResponse)
-        user_content = "##Information Needed\n"
-        rl_message = None
-        if response.information_needed:
-            print(response.information_needed)
-            for idx, step in enumerate(response.information_needed):
-                user_content += f"{idx+1}. {step}\n"
-                rl_message = self.rl.get_completion(user_content, "gpt-4o-mini")
-                print(rl_message)
+    def chat(self, message: str, streaming: bool = False) -> Union[str, Generator[str, None, None]]:
+        """Main chat function that handles both streaming and non-streaming responses."""
+        self.messages.append({"role": "user", "content": message})
+        
+        # Get initial completion and handle information needs
+        context = self._handle_information_needs()
+        
+        # If we have context, create a generator with it
+        if context:
+            messages_with_context = self._create_messages_with_context(context)
+            response_generator = self.get_completion_stream(
+                messages=messages_with_context, 
+                model="gpt-4o-mini"
+            )
+        else:
+            # No context needed, use original messages
+            response_generator = self.get_completion_stream(
+                messages=self.messages, 
+                model="gpt-4o-mini"
+            )
 
-        # Construct context
-        generator = None
-        if rl_message:
-            context = ""
-            for tool_call in rl_message.tool_calls:
-                context += f"# FROM : {tool_call.function.name}({tool_call.function.arguments})\n"
-                context += f"{FUNCTION_MAPPINGS[tool_call.function.name](ent=self.ent, **json.loads(tool_call.function.arguments))}"
-                eph = [{
-                    "role" : "system",
-                    "content" : f"""The data retrieval mechanism for the assistant has \\
-                    retrieved the following context which the assistant shall use to \\
-                    answer the user's question. The assistant should be advised that the user cannot see this context:\n {context}""".strip()
-                }]
-            generator = self.get_completion_stream(messages=self.messages + eph, model="gpt-4o-mini")
-            if rl_message:
-                self.messages.append({
-                    "role" : "system",
-                    "content" : f'<Context Made Opaque For This Step Due To Length>'
-                })
+        if streaming:
+            return self._stream_response(response_generator)
+        else:
+            return self._collect_response(response_generator)
 
-        # Iterating over the generator and printing each chunk as it's received
-        total_output = ""
+    def _handle_information_needs(self) -> Optional[str]:
+        """Handle information needs and return context if any."""
+        response: AgentResponse = self.get_completion(self.messages, "gpt-4o", AgentResponse)
+        
+        if not response.information_needed:
+            return None
+            
+        user_content = self._format_information_needs(response.information_needed)
+        rl_message = self.rl.get_completion(user_content, "gpt-4o-mini")
+        
+        if not rl_message:
+            return None
+            
+        return self._build_context(rl_message)
+
+    def _format_information_needs(self, info_needed: list) -> str:
+        """Format the information needs into a string."""
+        content = "##Information Needed\n"
+        for idx, step in enumerate(info_needed, 1):
+            content += f"{idx}. {step}\n"
+        return content
+
+    def _build_context(self, rl_message) -> str:
+        """Build context string from tool calls."""
+        context = ""
+        for tool_call in rl_message.tool_calls:
+            context += f"# FROM : {tool_call.function.name}({tool_call.function.arguments})\n"
+            context += f"{FUNCTION_MAPPINGS[tool_call.function.name](ent=self.ent, **json.loads(tool_call.function.arguments))}"
+        return context
+
+    def _create_messages_with_context(self, context: str) -> list:
+        """Create messages list with context."""
+        ephemeral_message = {
+            "role": "system",
+            "content": f"""The data retrieval mechanism for the assistant has \
+            retrieved the following context which the assistant shall use to \
+            answer the user's question. The assistant should be advised that the user cannot see this context:\n {context}""".strip()
+        }
+        
+        messages = self.messages.copy()
+        messages.append(ephemeral_message)
+        
+        # Add opaque context marker to original messages
+        self.messages.append({
+            "role": "system",
+            "content": '<Context Made Opaque For This Step Due To Length>'
+        })
+        
+        return messages
+
+    def _stream_response(self, generator) -> Generator[str, None, None]:
+        """Stream response chunks."""
         for chunk in generator:
             if chunk:
-                if not streaming:  # Check if chunk has content
-                    total_output += chunk
-                else:
-                    yield chunk
-        if not streaming:
-            return total_output
-        else:
-            return ""
+                yield chunk
+
+    def _collect_response(self, generator) -> str:
+        """Collect all response chunks into a single string."""
+        return "".join(chunk for chunk in generator if chunk)
 
 if __name__ == "__main__":
    a = Agent()

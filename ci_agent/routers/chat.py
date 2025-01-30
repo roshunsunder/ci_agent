@@ -64,14 +64,18 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
         
         try:
             user_session = active_connections[user_id]
-            for _ in range(user_session.agent.MAX_TURNS):
+            for _ in range(user_session.agent.MAX_CHAT_TURNS):
                 # Handle incoming messages
                 data = await websocket.receive_text()
                 # Process messages...
-                user_session.agent.chat(message=data, streaming=streaming)
-                # echo for now
-                await websocket.send_text(f"You're {"not" if not streaming else ""} streaming!")
-                await websocket.send_text(f"You said: {data}")
+                if streaming:
+                    stream = user_session.agent.chat(message=data, streaming=streaming)
+                    for chunk in stream:
+                        if chunk:
+                            await websocket.send_text(chunk)
+                else:
+                    response = user_session.agent.chat(message=data, streaming=streaming)
+                    await websocket.send_text(response)
         except WebSocketDisconnect:
             # Clean up connection
             if user_id in active_connections:
