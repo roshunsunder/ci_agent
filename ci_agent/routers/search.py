@@ -1,7 +1,7 @@
 from typing import List
 from fastapi import APIRouter, HTTPException, Query
 from edgar import *
-from ci_agent.models import SearchResult
+from ci_agent.models.server_models import SearchResult
 
 # CORE LOGIC
 set_identity("Roshun Sunder roshun.sunder@gmail.com")

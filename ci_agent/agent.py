@@ -1,12 +1,21 @@
-from models import AgentResponse
+import json
+import os
+import datetime
+from ci_agent.models.agent_models import AgentResponse
+from dotenv import load_dotenv
 from openai import OpenAI
-from datetime import date
+from ci_agent.dependencies import public_companies_table
+from ci_agent.services.retrieval import RetrievalLayer
+from ci_agent.utils.mappings import FUNCTION_MAPPINGS
+
+load_dotenv()
 
 class Agent:
     def __init__(self, ent):
+        self.ent = ent
         self.system_prompt = f"""
         You are an agent that produces competitive intelligence on {ent.display_name}.
-        The current date is {date.today()}.
+        The current date is {datetime.date.today()}.
 
         Your job is to answer the user to the best of your ability. \\
         If you are unable to answer a question, you must say so. \\
@@ -75,7 +84,7 @@ class Agent:
           raise ValueError("Invalid filing type. Must be one of: '10-K', '10-Q', or '8-K'.")
 
       # Query the database for the company's filings
-      item = table.get_item(Key={'cik': str(ent.cik)}).get('Item', {})
+      item = public_companies_table.get_item(Key={'cik': str(self.ent.cik)}).get('Item', {})
       filings = item.get(filing_type, {})
 
       if not filings:
@@ -84,10 +93,10 @@ class Agent:
       # Handle date formatting and sorting
       if filing_type in ["10-K", "10-Q"]:
           # Dates are in "YYYY-MM-DD" format
-          dates = sorted(filings.keys(), key=lambda x: datetime.strptime(x, "%Y-%m-%d"))
+          dates = sorted(filings.keys(), key=lambda x: datetime.datetime.strptime(x, "%Y-%m-%d"))
       elif filing_type == "8-K":
           # Dates are in "Month DD, YYYY" format
-          dates = sorted(filings.keys(), key=lambda x: datetime.strptime(x, "%B %d, %Y"))
+          dates = sorted(filings.keys(), key=lambda x: datetime.datetime.strptime(x, "%B %d, %Y"))
 
       return dates
 
@@ -121,7 +130,7 @@ class Agent:
           context = ""
           for tool_call in rl_message.tool_calls:
             context += f"# FROM : {tool_call.function.name}({tool_call.function.arguments})\n"
-            context += f"{FUNCTION_MAPPINGS[tool_call.function.name](**json.loads(tool_call.function.arguments))}"
+            context += f"{FUNCTION_MAPPINGS[tool_call.function.name](ent=self.ent, **json.loads(tool_call.function.arguments))}"
           eph = [{
               "role" : "system",
               "content" : f"""The data retrieval mechanism for the assistant has \\

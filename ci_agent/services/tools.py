@@ -1,4 +1,5 @@
-from ci_agent.utils.mappings import section_enum_mappings, tenq_section_enum_mappings
+from ci_agent.utils.mappings import section_enums_mappings, tenq_section_enum_mappings
+
 tools = [
     {
         "type": "function",

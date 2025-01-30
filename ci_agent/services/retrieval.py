@@ -1,4 +1,9 @@
+import os
+from dotenv import load_dotenv
 from openai import OpenAI
+from ci_agent.services.tools import tools
+
+load_dotenv()
 
 class RetrievalLayer:
   def __init__(self, system_prompt):
