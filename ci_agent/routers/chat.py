@@ -68,6 +68,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 # Handle incoming messages
                 data = await websocket.receive_text()
                 # Process messages...
+                user_session.agent.chat(message=data, streaming=streaming)
                 # echo for now
                 await websocket.send_text(f"You're {"not" if not streaming else ""} streaming!")
                 await websocket.send_text(f"You said: {data}")

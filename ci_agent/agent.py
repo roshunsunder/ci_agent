@@ -110,44 +110,50 @@ class Agent:
           return f"from the dates {available_dates[0]} to {available_dates[-1]}"
 
 
-    def chat(self):
-      for _ in range(self.MAX_CHAT_TURNS):
-        message = input("User: ")
+    def chat(self, message:str, streaming:bool=False):
         self.messages.append({"role" : "user" , "content" : message})
         response : AgentResponse = self.get_completion(self.messages, "gpt-4o", AgentResponse)
         user_content = "##Information Needed\n"
         rl_message = None
         if response.information_needed:
-          print(response.information_needed)
-          for idx, step in enumerate(response.information_needed):
-            user_content += f"{idx+1}. {step}\n"
-          rl_message = self.rl.get_completion(user_content, "gpt-4o-mini")
-          print(rl_message)
+            print(response.information_needed)
+            for idx, step in enumerate(response.information_needed):
+                user_content += f"{idx+1}. {step}\n"
+                rl_message = self.rl.get_completion(user_content, "gpt-4o-mini")
+                print(rl_message)
 
         # Construct context
         generator = None
         if rl_message:
-          context = ""
-          for tool_call in rl_message.tool_calls:
-            context += f"# FROM : {tool_call.function.name}({tool_call.function.arguments})\n"
-            context += f"{FUNCTION_MAPPINGS[tool_call.function.name](ent=self.ent, **json.loads(tool_call.function.arguments))}"
-          eph = [{
-              "role" : "system",
-              "content" : f"""The data retrieval mechanism for the assistant has \\
-              retrieved the following context which the assistant shall use to \\
-              answer the user's question. The assistant should be advised that the user cannot see this context:\n {context}""".strip()
-          }]
-        generator = self.get_completion_stream(messages=self.messages + eph, model="gpt-4o-mini")
-        if rl_message:
-          self.messages.append({
-              "role" : "system",
-              "content" : f'<Context Made Opaque For This Step Due To Length>'
-          })
+            context = ""
+            for tool_call in rl_message.tool_calls:
+                context += f"# FROM : {tool_call.function.name}({tool_call.function.arguments})\n"
+                context += f"{FUNCTION_MAPPINGS[tool_call.function.name](ent=self.ent, **json.loads(tool_call.function.arguments))}"
+                eph = [{
+                    "role" : "system",
+                    "content" : f"""The data retrieval mechanism for the assistant has \\
+                    retrieved the following context which the assistant shall use to \\
+                    answer the user's question. The assistant should be advised that the user cannot see this context:\n {context}""".strip()
+                }]
+            generator = self.get_completion_stream(messages=self.messages + eph, model="gpt-4o-mini")
+            if rl_message:
+                self.messages.append({
+                    "role" : "system",
+                    "content" : f'<Context Made Opaque For This Step Due To Length>'
+                })
 
         # Iterating over the generator and printing each chunk as it's received
+        total_output = ""
         for chunk in generator:
-            if chunk:  # Check if chunk has content
-                print(chunk, end='', flush=True)
+            if chunk:
+                if not streaming:  # Check if chunk has content
+                    total_output += chunk
+                else:
+                    yield chunk
+        if not streaming:
+            return total_output
+        else:
+            return ""
 
 if __name__ == "__main__":
    a = Agent()
