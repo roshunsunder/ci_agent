@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
-from ci_agent.routers import chat, search
+from ci_agent.routers import agentconfig, chat, search
 
 load_dotenv()
 
@@ -9,6 +9,7 @@ app = FastAPI(title="Competitive Intelligence Agent API", version="0.1.0")
 # Routers
 app.include_router(search.router)
 app.include_router(chat.router)
+app.include_router(agentconfig.router)
 
 @app.get("/")
 def root():

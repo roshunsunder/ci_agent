@@ -1,15 +1,17 @@
+from datetime import date, datetime
 from typing import Optional
 from ci_agent.agent import Agent
 from ci_agent.models.server_models import UserSession
+from ci_agent.utils.constants import DATA_SOURCES
 from edgar import find
 from edgar.entities import CompanySearchResults
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 router = APIRouter()
 
 # Store active connections
 active_connections = {}
 
-async def verify_token(websocket: WebSocket) -> Optional[str]:
+async def verify(websocket: WebSocket) -> Optional[str]:
     """Verify the authentication token from the connection request."""
     try:
         # Get headers from the connection request
@@ -36,14 +38,39 @@ async def verify_token(websocket: WebSocket) -> Optional[str]:
     except Exception:
         return None
 
+def verify_date(date_str: str):
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+def verify_sources(data_sources: list[str]):
+    return (
+        not data_sources 
+        or not any(item not in DATA_SOURCES for item in data_sources)
+    )
+
 @router.websocket("/ask/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: str):
-    # Verify token before accepting connection
-    ent = await verify_token(websocket)
-    if not ent:
+async def websocket_endpoint(
+    websocket: WebSocket, 
+    user_id: str, 
+    data_sources: list[str] = Query([]),
+    start_date: str = Query("")
+    ):
+    # Verify before accepting connection
+    ent = await verify(websocket)
+    valid_date = verify_date(start_date)
+    valid_sources = verify_sources(data_sources)
+    
+    if (
+        not ent
+        or not valid_sources
+        or not valid_date
+    ):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
-        
+    
     try:
         await websocket.accept()
 
