@@ -10,7 +10,7 @@ def retrieve_8K_documents(ent, retrieval_mode, date_range=None, latest_count=1):
     # Sort 8-K documents by date
     sorted_eightks = sorted(
         eightks.items(),
-        key=lambda x: datetime.strptime(x[0], '%B %d, %Y'),
+        key=lambda x: datetime.strptime(x[0], '%Y-%m-%d'),
         reverse=True
     )
 
@@ -28,7 +28,7 @@ def retrieve_8K_documents(ent, retrieval_mode, date_range=None, latest_count=1):
         # Filter documents within the date range
         filtered_eightks = [
             item for item in sorted_eightks
-            if start_date <= datetime.strptime(item[0], '%B %d, %Y') <= end_date
+            if start_date <= datetime.strptime(item[0], '%Y-%m-%d') <= end_date
         ]
 
         # Return the filtered documents

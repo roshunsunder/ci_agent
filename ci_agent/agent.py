@@ -7,13 +7,15 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from ci_agent.dependencies import public_companies_table
 from ci_agent.services.retrieval import RetrievalLayer
-from ci_agent.utils.mappings import FUNCTION_MAPPINGS
+from ci_agent.utils.mappings import FUNCTION_MAPPINGS, section_enums_mappings, tenq_section_enum_mappings
 
 load_dotenv()
 
 class Agent:
-    def __init__(self, ent):
+    def __init__(self, ent, start_date, data_sources):
         self.ent = ent
+        self.start_date = start_date
+        self.data_sources = data_sources
         self.system_prompt = f"""
         You are an agent that produces competitive intelligence on {ent.display_name}.
         The current date is {datetime.date.today()}.
@@ -70,6 +72,23 @@ class Agent:
 
       for chunk in response:
           yield chunk.choices[0].delta.content
+    
+    def generate_summary(self, filing, raw_text, doc_type, section_name=None):
+        system_message = f"""Extract the key information from this {doc_type}. 
+        Include financial information and key data if they exist. You will be penalized for generally describing and 
+        summarizing as opposed to explicitly gathering particular information."""
+        
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": raw_text},
+        ]
+
+        response = self.client.chat.completions.create(
+            model="gpt-4o-mini",  # Change model as needed
+            messages=messages
+        )
+
+        return f"""# KEY INFO FROM {filing}{", " + section_name if section_name else ""} #\n""" + response.choices[0].message.content
 
     def dates_available(self, filing_type):
       """
@@ -92,19 +111,16 @@ class Agent:
           return []  # Return an empty list if no filings are found
 
       # Handle date formatting and sorting
-      if filing_type in ["10-K", "10-Q"]:
+      if filing_type in ["10-K", "10-Q", "8-K"]:
           # Dates are in "YYYY-MM-DD" format
           dates = sorted(filings.keys(), key=lambda x: datetime.datetime.strptime(x, "%Y-%m-%d"))
-      elif filing_type == "8-K":
-          # Dates are in "Month DD, YYYY" format
-          dates = sorted(filings.keys(), key=lambda x: datetime.datetime.strptime(x, "%B %d, %Y"))
 
       return dates
 
     def readable_date_range(self, filing_type):
       available_dates = self.dates_available(filing_type)
       if not available_dates:
-          return "NO AVAILABLE DATES"
+          return "for NO AVAILABLE DATES"
       elif len(available_dates) == 1:
           return f"for the {available_dates[0]}"
       else:
@@ -196,6 +212,274 @@ class Agent:
     def _collect_response(self, generator) -> str:
         """Collect all response chunks into a single string."""
         return "".join(chunk for chunk in generator if chunk)
+    
+    def handle_tenk(self, ent, filing, generate_summary, rewrite_summaries=False):
+        """
+        Handles storing or retrieving the 10-K summaries for a given filing date, structured by items.
+
+        Args:
+            ent (object): A TenK object containing the filing information.
+            filing (object): The filing object containing raw text and filing date.
+            generate_summary (function): A function that takes raw_text and returns a summary.
+
+        Returns:
+            dict: A dictionary containing the summaries of the items in the 10-K filing.
+        """
+
+        table = public_companies_table  # Replace with your table name
+        filing_date = str(filing.filing_date)  # e.g., "2024-01-01"
+
+        # Step 1: Try to fetch the item for the given cik
+        response = table.get_item(Key={'cik': str(ent.cik)})
+        item = response.get('Item', {})
+
+        if not item:
+            # Company has not been added yet
+            response = table.put_item(
+                Item={
+                    'cik': f'{ent.cik}',
+                    'display_name': ent.display_name,
+                    'icon': ent.icon,
+                    'industry': ent.industry,
+                    'ein': ent.ein,
+                    '10-K': {}
+                }
+            )
+            if response['ResponseMetadata']['HTTPStatusCode'] == 200:
+                print("Company added to the table.")
+            else:
+                print("Error writing item to the table.")
+                return "Something went wrong adding the company"
+
+        # Step 2: Check if the filing date exists in the '10-K' attribute
+        tenk_data = item.get('10-K', {})
+        if filing_date in tenk_data and not rewrite_summaries:
+            # Filing date already exists; return the existing summaries
+            return tenk_data[filing_date]
+
+        # Step 3: Parse the raw text and generate summaries for each section
+        summaries = {}
+        for section_name, section_enum in section_enums_mappings.items():
+            # Extract the raw text for this specific section (you may need a helper function here)
+            section_raw_text = filing[section_enum]
+
+            if section_raw_text:
+                # Generate a summary for the section
+                summary = generate_summary(filing, section_raw_text, "10-K", section_name)
+                summaries[section_enum] = {
+                    'summary': summary,
+                }
+            else:
+                print(f"Section {section_name} not found in the filing.")
+
+        print(f"Extracting Key Info from {filing}")
+
+        # Step 3.5: Add financials to the summaries object
+        if hasattr(filing, 'financials') and filing.financials:
+            financials = {
+                "balance sheet": filing.financials.get_balance_sheet().data.drop(
+                    ['style', 'concept', 'level'], axis=1).to_markdown(),
+                "income statement": filing.financials.get_income_statement().data.drop(
+                    ['style', 'concept', 'level'], axis=1).to_markdown(),
+                "cash flow statement": filing.financials.get_cash_flow_statement().data.drop(
+                    ['style', 'concept', 'level'], axis=1).to_markdown()
+            }
+        else:
+            financials = {}
+        summaries["financials"] = financials
+
+        # Step 4: Write the new summaries to the database
+        if '10-K' not in item:
+            item['10-K'] = {}  # Initialize the 10-K attribute if it doesn't exist
+
+        # Add the new entry for the filing date
+        item['10-K'][filing_date] = summaries
+
+        # Save the updated item back to the table
+        table.put_item(Item=item)
+
+        # Return the newly generated summaries
+        return summaries
+    
+    def handle_tenq(self, ent, filing, generate_summary, rewrite_summaries=False):
+        """
+        Handles storing or retrieving the 10-K summaries for a given filing date, structured by items.
+
+        Args:
+            ent (object): A TenQ object containing the filing information.
+            filing (object): The filing object containing raw text and filing date.
+            generate_summary (function): A function that takes raw_text and returns a summary.
+
+        Returns:
+            dict: A dictionary containing the summaries of the items in the 10-Q filing.
+        """
+
+        table = public_companies_table  # Replace with your table name
+        filing_date = str(filing.filing_date)  # e.g., "2024-01-01"
+
+        # Step 1: Try to fetch the item for the given cik
+        response = table.get_item(Key={'cik': str(ent.cik)})
+        item = response.get('Item', {})
+
+        if not item:
+            # Company has not been added yet
+            response = table.put_item(
+                Item={
+                    'cik': f'{ent.cik}',
+                    'display_name': ent.display_name,
+                    'icon': ent.icon,
+                    'industry': ent.industry,
+                    'ein': ent.ein,
+                    '10-Q': {}
+                }
+            )
+            if response['ResponseMetadata']['HTTPStatusCode'] == 200:
+                print("Company added to the table.")
+            else:
+                print("Error writing item to the table.")
+                return "Something went wrong adding the company"
+
+        # Step 2: Check if the filing date exists in the '10-K' attribute
+        tenq_data = item.get('10-Q', {})
+        if filing_date in tenq_data and not rewrite_summaries:
+            # Filing date already exists; return the existing summaries
+            return tenq_data[filing_date]
+
+        # Step 3: Parse the raw text and generate summaries for each section
+        summaries = {}
+        for section_name, section_enum in tenq_section_enum_mappings.items():
+            # Extract the raw text for this specific section (you may need a helper function here)
+            section_raw_text = filing[section_enum]
+
+            if section_raw_text:
+                # Generate a summary for the section
+                summary = generate_summary(filing, section_raw_text, "10-Q", section_name)
+                summaries[section_enum] = {
+                    'summary': summary,
+                }
+            else:
+                print(f"Section {section_name} not found in the filing.")
+
+        print(f"Extracting Key Info from {filing}")
+
+        # Step 3.5: Add financials to the summaries object
+
+        if hasattr(filing, 'financials') and filing.financials:
+            financials = {
+                "balance sheet": filing.financials.get_balance_sheet().data.drop(
+                    ['style', 'concept', 'level'], axis=1).to_markdown(),
+                "income statement": filing.financials.get_income_statement().data.drop(
+                    ['style', 'concept', 'level'], axis=1).to_markdown(),
+                "cash flow statement": filing.financials.get_cash_flow_statement().data.drop(
+                    ['style', 'concept', 'level'], axis=1).to_markdown()
+            }
+        else:
+            financials = {}
+        summaries["financials"] = financials
+
+        # Step 4: Write the new summaries to the database
+        if '10-Q' not in item:
+            item['10-Q'] = {}  # Initialize the 10-K attribute if it doesn't exist
+
+        # Add the new entry for the filing date
+        item['10-Q'][filing_date] = summaries
+
+        # Save the updated item back to the table
+        table.put_item(Item=item)
+
+        # Return the newly generated summaries
+        return summaries
+    
+    def handle_eightk(self, ent, filing, generate_summary):
+        """
+        Handles storing or retrieving the 8-K summary for a given filing date.
+
+        Args:
+            ent (object): An EightK object containing the filing information.
+            generate_summary (function): A function that takes raw_text and returns a summary.
+
+        Returns:
+            str: The summary of the 8-K filing.
+        """
+        def get_eightk_filing_text(filing):
+            eightk_repr = f"""##### {str(filing)} #####\n\n"""
+            for item in filing.items:
+                if item not in {'Item 9.01'}:
+                    eightk_repr += f"**{str(item)}**\n"
+                    eightk_repr += str(filing[item])
+                    eightk_repr += "\n\n"
+            return eightk_repr
+        
+        table = public_companies_table  # Replace with your table name
+        filing_date = datetime.datetime.strptime(str(filing.date_of_report), "%B %d, %Y").strftime("%Y-%m-%d")
+        raw_text = get_eightk_filing_text(filing)
+
+        # Step 1: Try to fetch the item for the given cik
+        response = table.get_item(Key={'cik': str(ent.cik)})
+        item = response.get('Item', {})
+
+        if not item:
+            # Company has not been added yet
+            response = table.put_item(
+                Item={
+                    'cik': f'{ent.cik}',
+                    'display_name': ent.display_name,
+                    'icon': ent.icon,
+                    'industry': ent.industry,
+                    'ein' : ent.ein,
+                    '8-K' : {}
+                    }
+                )
+            if response['ResponseMetadata']['HTTPStatusCode'] == 200:
+                print("Company added to the table.")
+            else:
+                print("Error writing item to the table.")
+                return "Something went wrong adding the company"
+
+        # Step 2: Check if the filing date exists in the '8-K' attribute
+        eightk_data = item.get('8-K', {})
+        if filing_date in eightk_data:
+            # Filing date already exists; return the existing summary
+            return eightk_data[filing_date]['summary']
+
+        # Step 3: If filing date does not exist, generate the summary
+        summary = generate_summary(filing, raw_text, "8-K")
+        print(f"Extracting Key Info from {filing}")
+
+        # Step 4: Write the new summary and raw_text to the database
+        if '8-K' not in item:
+            item['8-K'] = {}  # Initialize the 8-K attribute if it doesn't exist
+
+        # Add the new entry for the filing date
+        item['8-K'][filing_date] = {
+            'summary': summary,
+        }
+
+        # Save the updated item back to the table
+        table.put_item(Item=item)
+
+        # Return the newly generated summary
+        return summary
+    
+    def init_data(self):
+        function_handlers = {
+            "10-K" : self.handle_tenk,
+            "10-Q" : self.handle_tenq,
+            "8-K" : self.handle_eightk
+        }
+        for source in self.data_sources:
+            dates = self.dates_available(source)
+            filings = self.ent.get_filings(form=source).filter(date=f"{self.start_date}:{str(datetime.date.today())}")
+            for filing in filings:
+                f = filing.obj()
+                if str(f.filing_date) not in dates:
+                    # Process
+                    func = function_handlers.get(source)
+                    if func:
+                        print(f"Processing {source}")
+                        func(self.ent, f, self.generate_summary)
+        print("LOADED SOURCES")
+
 
 if __name__ == "__main__":
    a = Agent()

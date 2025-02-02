@@ -53,16 +53,17 @@ def verify_sources(data_sources: list[str]):
 
 @router.websocket("/ask/{user_id}")
 async def websocket_endpoint(
-    websocket: WebSocket, 
-    user_id: str, 
-    data_sources: list[str] = Query([]),
-    start_date: str = Query("")
+        websocket: WebSocket, 
+        user_id: str, 
+        data_sources: list[str] = Query([]),
+        start_date: str = Query(""),
+        stream: bool = Query(False)
     ):
     # Verify before accepting connection
     ent = await verify(websocket)
     valid_date = verify_date(start_date)
     valid_sources = verify_sources(data_sources)
-    
+
     if (
         not ent
         or not valid_sources
@@ -73,35 +74,28 @@ async def websocket_endpoint(
     
     try:
         await websocket.accept()
-
-        streaming = False
-        streaming_param = dict(websocket.query_params).get("stream", "false")
-        if streaming_param.lower() == "true":
-            streaming = True
-        
-        # Initialize your entity here using the verified token
-        # ent = await initialize_entity(token)
         
         # Only store connection if authentication successful
         active_connections[user_id] = UserSession(
             websocket=websocket,
-            agent=Agent(ent),
-            streaming=streaming
+            agent=Agent(ent, start_date, data_sources),
+            streaming=stream
         )
         
         try:
             user_session = active_connections[user_id]
+            user_session.agent.init_data()
             for _ in range(user_session.agent.MAX_CHAT_TURNS):
                 # Handle incoming messages
                 data = await websocket.receive_text()
                 # Process messages...
-                if streaming:
-                    stream = user_session.agent.chat(message=data, streaming=streaming)
+                if stream:
+                    stream = user_session.agent.chat(message=data, streaming=stream)
                     for chunk in stream:
                         if chunk:
                             await websocket.send_text(chunk)
                 else:
-                    response = user_session.agent.chat(message=data, streaming=streaming)
+                    response = user_session.agent.chat(message=data, streaming=stream)
                     await websocket.send_text(response)
         except WebSocketDisconnect:
             # Clean up connection
@@ -110,7 +104,7 @@ async def websocket_endpoint(
                 
     except Exception as e:
         # Handle any other errors
-        print(e)
         if user_id in active_connections:
             del active_connections[user_id]
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+        print(e)

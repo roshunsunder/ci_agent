@@ -17,9 +17,3 @@ class UserSession(BaseModel):
 class AvailableInfo(BaseModel):
     """Information available on a particular entity"""
     info_dict: Dict[str, Tuple[str, str]]
-
-class AgentConfig(BaseModel):
-    """Information needed to instantiate an agent"""
-    unique_id: str
-    start_date: str
-    data_sources : List[str]
