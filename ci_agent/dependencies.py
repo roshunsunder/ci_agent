@@ -12,3 +12,5 @@ dynamodb = boto3.resource(
 )
 
 public_companies_table = dynamodb.Table('public_companies')
+users_table = dynamodb.Table('users')
+agents_table = dynamodb.Table('agents')

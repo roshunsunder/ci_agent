@@ -1,6 +1,7 @@
 import json
 import os
 import datetime
+from boto3.dynamodb.conditions import Key, Attr
 from typing import Generator, Optional, Union
 from ci_agent.models.agent_models import AgentResponse
 from dotenv import load_dotenv
@@ -26,6 +27,7 @@ class Agent:
 
         You have the ability to do the following:
           - Retrieve entire 8-K document summaries by date range or latest entries.
+            -- For 8-Ks, you have filing(s) available {self.readable_date_range("8-K")}.
           - Retrieve specific financial statements from 10-K filings (balance sheet, income statement, cash flow statement)."
           - Retrieve specific item summaries of 10-K documents by date range or latest entries (these are standard items like 1. Business, 1A. Risk, , etc.).
             -- Note: for financial information, do not retrieve Item 8. That is what the previous function is for.
@@ -91,31 +93,41 @@ class Agent:
         return f"""# KEY INFO FROM {filing}{", " + section_name if section_name else ""} #\n""" + response.choices[0].message.content
 
     def dates_available(self, filing_type):
-      """
-      Retrieves an ordered list of available dates for the specified filing type (10-K, 10-Q, or 8-K).
+        """
+        Retrieves an ordered list of available filing dates for the specified filing type (10-K, 10-Q, or 8-K)
+        for the current company (based on self.ent.cik).
 
-      Args:
-          filing_type (str): The type of filing ('10-K', '10-Q', or '8-K').
+        Assumes that each filing is stored as a separate item in DynamoDB and that the table has a Global Secondary Index (GSI)
+        with 'cik' as the partition key and 'filing_date' as the sort key (e.g., "cik-filing_date-index").
 
-      Returns:
-          list: A list of ordered dates for the specified filing type.
-      """
-      if filing_type not in ["10-K", "10-Q", "8-K"]:
-          raise ValueError("Invalid filing type. Must be one of: '10-K', '10-Q', or '8-K'.")
+        Args:
+            filing_type (str): The type of filing ('10-K', '10-Q', or '8-K').
 
-      # Query the database for the company's filings
-      item = public_companies_table.get_item(Key={'cik': str(self.ent.cik)}).get('Item', {})
-      filings = item.get(filing_type, {})
+        Returns:
+            list: A list of ordered dates (as strings in "YYYY-MM-DD" format) for the specified filing type.
+        """
+        if filing_type not in ["10-K", "10-Q", "8-K"]:
+            raise ValueError("Invalid filing type. Must be one of: '10-K', '10-Q', or '8-K'.")
 
-      if not filings:
-          return []  # Return an empty list if no filings are found
+        # Query the DynamoDB table using a GSI that indexes on 'cik' (and sorts by 'filing_date').
+        response = public_companies_table.query(
+            IndexName='cik-filing_date-index',  # Adjust the index name as configured in your table
+            KeyConditionExpression=Key('cik').eq(str(self.ent.cik)),
+            FilterExpression=Attr('filing_type').eq(filing_type)
+        )
 
-      # Handle date formatting and sorting
-      if filing_type in ["10-K", "10-Q", "8-K"]:
-          # Dates are in "YYYY-MM-DD" format
-          dates = sorted(filings.keys(), key=lambda x: datetime.datetime.strptime(x, "%Y-%m-%d"))
+        items = response.get('Items', [])
+        if not items:
+            return []  # Return an empty list if no filings are found
 
-      return dates
+        # Extract filing dates from the returned items.
+        dates = [item['filing_date'] for item in items]
+
+        # Sort the dates (assuming the dates are stored as "YYYY-MM-DD").
+        dates.sort(key=lambda date_str: datetime.datetime.strptime(date_str, "%Y-%m-%d"))
+
+        return dates
+
 
     def readable_date_range(self, filing_type):
       available_dates = self.dates_available(filing_type)
@@ -181,6 +193,7 @@ class Agent:
         for tool_call in rl_message.tool_calls:
             context += f"# FROM : {tool_call.function.name}({tool_call.function.arguments})\n"
             context += f"{FUNCTION_MAPPINGS[tool_call.function.name](ent=self.ent, **json.loads(tool_call.function.arguments))}"
+        print(context)
         return context
 
     def _create_messages_with_context(self, context: str) -> list:
@@ -213,184 +226,91 @@ class Agent:
         """Collect all response chunks into a single string."""
         return "".join(chunk for chunk in generator if chunk)
     
-    def handle_tenk(self, ent, filing, generate_summary, rewrite_summaries=False):
+    def handle_10_filing(self, ent, filing, generate_summary, filing_type, rewrite_summaries=False):
         """
-        Handles storing or retrieving the 10-K summaries for a given filing date, structured by items.
+        Stores or retrieves filing summaries (and financials) in a DynamoDB table where each item is
+        keyed by a composite of cik, filing_type, and filing_date.
 
         Args:
-            ent (object): A TenK object containing the filing information.
-            filing (object): The filing object containing raw text and filing date.
-            generate_summary (function): A function that takes raw_text and returns a summary.
+            ent (object): An entity (e.g., a TenK or TenQ object) with company details.
+            filing (object): The filing object containing raw text, filing date, and optionally financials.
+            generate_summary (function): A function that accepts (filing, raw_text, filing_type, section_name)
+                                        and returns a summary string.
+            filing_type (str): Either "10-K" or "10-Q".
+            rewrite_summaries (bool): If True, forces re-generation of the summaries even if they exist.
 
         Returns:
-            dict: A dictionary containing the summaries of the items in the 10-K filing.
+            dict: The DynamoDB item for the filing, including the summaries and financials.
         """
+        # Choose the appropriate section mapping based on the filing_type.
+        if filing_type == "10-K":
+            section_mapping = section_enums_mappings  # Must be defined elsewhere
+        elif filing_type == "10-Q":
+            section_mapping = tenq_section_enum_mappings  # Must be defined elsewhere
+        else:
+            raise ValueError("filing_type must be either '10-K' or '10-Q'")
 
-        table = public_companies_table  # Replace with your table name
+        table = public_companies_table  # Your DynamoDB table object
         filing_date = str(filing.filing_date)  # e.g., "2024-01-01"
 
-        # Step 1: Try to fetch the item for the given cik
-        response = table.get_item(Key={'cik': str(ent.cik)})
-        item = response.get('Item', {})
+        # Build a composite key (primary key) that uniquely identifies this filing.
+        composite_key = f"{ent.cik}#{filing_type}#{filing_date}"
 
-        if not item:
-            # Company has not been added yet
-            response = table.put_item(
-                Item={
-                    'cik': f'{ent.cik}',
-                    'display_name': ent.display_name,
-                    'icon': ent.icon,
-                    'industry': ent.industry,
-                    'ein': ent.ein,
-                    '10-K': {}
-                }
-            )
-            if response['ResponseMetadata']['HTTPStatusCode'] == 200:
-                print("Company added to the table.")
-            else:
-                print("Error writing item to the table.")
-                return "Something went wrong adding the company"
+        # Step 1: Check if an item for this composite key already exists.
+        response = table.get_item(Key={'cik_filing_date': composite_key})
+        existing_item = response.get('Item')
+        if existing_item and not rewrite_summaries:
+            # The filing already exists and we are not rewriting summaries.
+            return existing_item
 
-        # Step 2: Check if the filing date exists in the '10-K' attribute
-        tenk_data = item.get('10-K', {})
-        if filing_date in tenk_data and not rewrite_summaries:
-            # Filing date already exists; return the existing summaries
-            return tenk_data[filing_date]
-
-        # Step 3: Parse the raw text and generate summaries for each section
+        # Step 2: Generate summaries for each filing section.
         summaries = {}
-        for section_name, section_enum in section_enums_mappings.items():
-            # Extract the raw text for this specific section (you may need a helper function here)
+        for section_name, section_enum in section_mapping.items():
             section_raw_text = filing[section_enum]
-
             if section_raw_text:
-                # Generate a summary for the section
-                summary = generate_summary(filing, section_raw_text, "10-K", section_name)
+                summary = generate_summary(filing, section_raw_text, filing_type, section_name)
                 summaries[section_enum] = {
-                    'summary': summary,
+                    'summary': summary
                 }
             else:
                 print(f"Section {section_name} not found in the filing.")
 
-        print(f"Extracting Key Info from {filing}")
-
-        # Step 3.5: Add financials to the summaries object
+        # Step 3: Process financials if available.
         if hasattr(filing, 'financials') and filing.financials:
             financials = {
                 "balance sheet": filing.financials.get_balance_sheet().data.drop(
-                    ['style', 'concept', 'level'], axis=1).to_markdown(),
+                    ['style', 'concept', 'level'], axis=1
+                ).to_markdown(),
                 "income statement": filing.financials.get_income_statement().data.drop(
-                    ['style', 'concept', 'level'], axis=1).to_markdown(),
+                    ['style', 'concept', 'level'], axis=1
+                ).to_markdown(),
                 "cash flow statement": filing.financials.get_cash_flow_statement().data.drop(
-                    ['style', 'concept', 'level'], axis=1).to_markdown()
+                    ['style', 'concept', 'level'], axis=1
+                ).to_markdown()
             }
         else:
             financials = {}
+        # Include financials under a dedicated key.
         summaries["financials"] = financials
 
-        # Step 4: Write the new summaries to the database
-        if '10-K' not in item:
-            item['10-K'] = {}  # Initialize the 10-K attribute if it doesn't exist
+        # Step 4: Create the new item with a composite primary key.
+        new_item = {
+            'cik_filing_date': composite_key,
+            'cik': str(ent.cik),
+            'filing_type': filing_type,
+            'filing_date': filing_date,
+            'summaries': summaries
+        }
 
-        # Add the new entry for the filing date
-        item['10-K'][filing_date] = summaries
+        # Step 5: Write the new item to the DynamoDB table.
+        table.put_item(Item=new_item)
 
-        # Save the updated item back to the table
-        table.put_item(Item=item)
+        # Return the newly created (or updated) filing item.
+        return new_item
 
-        # Return the newly generated summaries
-        return summaries
+
     
-    def handle_tenq(self, ent, filing, generate_summary, rewrite_summaries=False):
-        """
-        Handles storing or retrieving the 10-K summaries for a given filing date, structured by items.
-
-        Args:
-            ent (object): A TenQ object containing the filing information.
-            filing (object): The filing object containing raw text and filing date.
-            generate_summary (function): A function that takes raw_text and returns a summary.
-
-        Returns:
-            dict: A dictionary containing the summaries of the items in the 10-Q filing.
-        """
-
-        table = public_companies_table  # Replace with your table name
-        filing_date = str(filing.filing_date)  # e.g., "2024-01-01"
-
-        # Step 1: Try to fetch the item for the given cik
-        response = table.get_item(Key={'cik': str(ent.cik)})
-        item = response.get('Item', {})
-
-        if not item:
-            # Company has not been added yet
-            response = table.put_item(
-                Item={
-                    'cik': f'{ent.cik}',
-                    'display_name': ent.display_name,
-                    'icon': ent.icon,
-                    'industry': ent.industry,
-                    'ein': ent.ein,
-                    '10-Q': {}
-                }
-            )
-            if response['ResponseMetadata']['HTTPStatusCode'] == 200:
-                print("Company added to the table.")
-            else:
-                print("Error writing item to the table.")
-                return "Something went wrong adding the company"
-
-        # Step 2: Check if the filing date exists in the '10-K' attribute
-        tenq_data = item.get('10-Q', {})
-        if filing_date in tenq_data and not rewrite_summaries:
-            # Filing date already exists; return the existing summaries
-            return tenq_data[filing_date]
-
-        # Step 3: Parse the raw text and generate summaries for each section
-        summaries = {}
-        for section_name, section_enum in tenq_section_enum_mappings.items():
-            # Extract the raw text for this specific section (you may need a helper function here)
-            section_raw_text = filing[section_enum]
-
-            if section_raw_text:
-                # Generate a summary for the section
-                summary = generate_summary(filing, section_raw_text, "10-Q", section_name)
-                summaries[section_enum] = {
-                    'summary': summary,
-                }
-            else:
-                print(f"Section {section_name} not found in the filing.")
-
-        print(f"Extracting Key Info from {filing}")
-
-        # Step 3.5: Add financials to the summaries object
-
-        if hasattr(filing, 'financials') and filing.financials:
-            financials = {
-                "balance sheet": filing.financials.get_balance_sheet().data.drop(
-                    ['style', 'concept', 'level'], axis=1).to_markdown(),
-                "income statement": filing.financials.get_income_statement().data.drop(
-                    ['style', 'concept', 'level'], axis=1).to_markdown(),
-                "cash flow statement": filing.financials.get_cash_flow_statement().data.drop(
-                    ['style', 'concept', 'level'], axis=1).to_markdown()
-            }
-        else:
-            financials = {}
-        summaries["financials"] = financials
-
-        # Step 4: Write the new summaries to the database
-        if '10-Q' not in item:
-            item['10-Q'] = {}  # Initialize the 10-K attribute if it doesn't exist
-
-        # Add the new entry for the filing date
-        item['10-Q'][filing_date] = summaries
-
-        # Save the updated item back to the table
-        table.put_item(Item=item)
-
-        # Return the newly generated summaries
-        return summaries
-    
-    def handle_eightk(self, ent, filing, generate_summary):
+    def handle_eightk(self, ent, filing, generate_summary, rewrite_summaries=False):
         """
         Handles storing or retrieving the 8-K summary for a given filing date.
 
@@ -415,69 +335,79 @@ class Agent:
         raw_text = get_eightk_filing_text(filing)
 
         # Step 1: Try to fetch the item for the given cik
-        response = table.get_item(Key={'cik': str(ent.cik)})
-        item = response.get('Item', {})
+        # Build a composite key (primary key) that uniquely identifies this filing.
+        composite_key = f"{ent.cik}#8-K#{filing_date}"
 
-        if not item:
-            # Company has not been added yet
-            response = table.put_item(
-                Item={
-                    'cik': f'{ent.cik}',
-                    'display_name': ent.display_name,
-                    'icon': ent.icon,
-                    'industry': ent.industry,
-                    'ein' : ent.ein,
-                    '8-K' : {}
-                    }
-                )
-            if response['ResponseMetadata']['HTTPStatusCode'] == 200:
-                print("Company added to the table.")
-            else:
-                print("Error writing item to the table.")
-                return "Something went wrong adding the company"
+        # Step 1: Check if an item for this composite key already exists.
+        response = table.get_item(Key={'cik_filing_date': composite_key})
+        existing_item = response.get('Item')
+        if existing_item and not rewrite_summaries:
+            # The filing already exists and we are not rewriting summaries.
+            return existing_item
 
-        # Step 2: Check if the filing date exists in the '8-K' attribute
-        eightk_data = item.get('8-K', {})
-        if filing_date in eightk_data:
-            # Filing date already exists; return the existing summary
-            return eightk_data[filing_date]['summary']
-
-        # Step 3: If filing date does not exist, generate the summary
         summary = generate_summary(filing, raw_text, "8-K")
         print(f"Extracting Key Info from {filing}")
 
         # Step 4: Write the new summary and raw_text to the database
-        if '8-K' not in item:
-            item['8-K'] = {}  # Initialize the 8-K attribute if it doesn't exist
-
-        # Add the new entry for the filing date
-        item['8-K'][filing_date] = {
-            'summary': summary,
+        new_item = {
+            'cik_filing_date': composite_key,
+            'cik': str(ent.cik),
+            'filing_type': "8-K",
+            'filing_date': filing_date,
+            'summary': summary
         }
 
         # Save the updated item back to the table
-        table.put_item(Item=item)
+        table.put_item(Item=new_item)
 
         # Return the newly generated summary
         return summary
-    
+    def _handler_dispatcher(self, source_type, params):
+        match source_type:
+            case "10-K":
+                self.handle_10_filing(
+                    ent=params["ent"],
+                    filing=params["filing"],
+                    generate_summary=params["summary_generation_function"],
+                    filing_type=params["source_type"],
+                    rewrite_summaries=params["rewrite_summaries"]
+                )
+            case "10-Q":
+                self.handle_10_filing(
+                    ent=params["ent"],
+                    filing=params["filing"],
+                    generate_summary=params["summary_generation_function"],
+                    filing_type=params["source_type"],
+                    rewrite_summaries=params["rewrite_summaries"]
+                )
+            case "8-K":
+                self.handle_eightk(
+                    ent=params["ent"],
+                    filing=params["filing"],
+                    generate_summary=params["summary_generation_function"],
+                    rewrite_summaries=params["rewrite_summaries"]
+                )
+            case _:
+                raise ValueError("Unrecognized filing type")
+                
     def init_data(self):
-        function_handlers = {
-            "10-K" : self.handle_tenk,
-            "10-Q" : self.handle_tenq,
-            "8-K" : self.handle_eightk
-        }
         for source in self.data_sources:
             dates = self.dates_available(source)
+            print(f"Dates available for {source}: ", dates)
             filings = self.ent.get_filings(form=source).filter(date=f"{self.start_date}:{str(datetime.date.today())}")
             for filing in filings:
                 f = filing.obj()
                 if str(f.filing_date) not in dates:
+                    print(f"Couldn't find {str(f.filing_date)} in database")
                     # Process
-                    func = function_handlers.get(source)
-                    if func:
-                        print(f"Processing {source}")
-                        func(self.ent, f, self.generate_summary)
+                    params = {
+                        "ent" : self.ent,
+                        "filing" : f,
+                        "summary_generation_function" : self.generate_summary,
+                        "source_type" : source,
+                        "rewrite_summaries" : False
+                    }
+                    self._handler_dispatcher(source_type=source, params=params)
         print("LOADED SOURCES")
 
 

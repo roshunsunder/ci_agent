@@ -73,8 +73,6 @@ async def websocket_endpoint(
         return
     
     try:
-        await websocket.accept()
-        
         # Only store connection if authentication successful
         active_connections[user_id] = UserSession(
             websocket=websocket,
@@ -85,6 +83,7 @@ async def websocket_endpoint(
         try:
             user_session = active_connections[user_id]
             user_session.agent.init_data()
+            await websocket.accept()
             for _ in range(user_session.agent.MAX_CHAT_TURNS):
                 # Handle incoming messages
                 data = await websocket.receive_text()
@@ -107,4 +106,4 @@ async def websocket_endpoint(
         if user_id in active_connections:
             del active_connections[user_id]
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
-        print(e)
+        raise e

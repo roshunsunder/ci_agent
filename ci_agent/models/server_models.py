@@ -14,6 +14,12 @@ class UserSession(BaseModel):
     agent: Agent
     streaming: bool
 
+class LoginRequest(BaseModel):
+    auth_provider_id: str  # e.g., Firebase UID
+    provider_type: str  # e.g., "firebase", "github"
+    email: str | None = None  # Optional, for new users
+    name: str | None = None  # Optional, for new users
+
 class AvailableInfo(BaseModel):
     """Information available on a particular entity"""
     info_dict: Dict[str, Tuple[str, str]]

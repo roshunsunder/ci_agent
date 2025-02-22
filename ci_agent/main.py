@@ -2,7 +2,7 @@ import nest_asyncio
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from ci_agent.routers import agentconfig, chat, search
+from ci_agent.routers import agentconfig, auth, chat, search
 
 load_dotenv()
 nest_asyncio.apply()
@@ -26,6 +26,7 @@ app.add_middleware(
 app.include_router(search.router)
 app.include_router(chat.router)
 app.include_router(agentconfig.router)
+app.include_router(auth.router)
 
 @app.get("/")
 def root():
