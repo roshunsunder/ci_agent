@@ -10,7 +10,7 @@ from ci_agent.dependencies import public_companies_table
 from ci_agent.services.retrieval import RetrievalLayer
 from ci_agent.utils.mappings import FUNCTION_MAPPINGS, section_enums_mappings, tenq_section_enum_mappings
 
-load_dotenv()
+load_dotenv("./.env")
 
 class Agent:
     def __init__(self, ent, start_date, data_sources):

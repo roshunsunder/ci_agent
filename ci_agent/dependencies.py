@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 import os
 import boto3
 # Create a DynamoDB client
-load_dotenv()
+load_dotenv("./.env")
 
 dynamodb = boto3.resource(
     'dynamodb',

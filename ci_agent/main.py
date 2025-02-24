@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from ci_agent.routers import agentconfig, auth, chat, search
 
-load_dotenv()
+load_dotenv("./.env")
 nest_asyncio.apply()
 
 app = FastAPI(title="Competitive Intelligence Agent API", version="0.1.0")
@@ -42,4 +42,4 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
     print("Starting Agent API")
-    uvicorn.run("ci_agent.main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("ci_agent.main:app", host="0.0.0.0", port=8000, reload=True)
