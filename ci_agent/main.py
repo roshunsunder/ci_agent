@@ -4,6 +4,17 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from ci_agent.routers import agentconfig, auth, chat, search
 
+# REMOVE
+import requests
+SEARXNG_URL = "http://searxng:8080/search"
+def search_query(query):
+    params = {"q": query, "format": "json"}
+    response = requests.get(SEARXNG_URL, params=params)
+    return response
+
+print(search_query("FastAPI Docker integration"))
+# /REMOVE
+
 load_dotenv("./.env")
 nest_asyncio.apply()
 

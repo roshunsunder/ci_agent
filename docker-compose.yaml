@@ -9,4 +9,22 @@ services:
       - ENV=production
     env_file:
       - ./.env
+    depends_on:
+      - searxng
+    networks:
+      - app_network
     command: ["python3.12", "-m", "ci_agent.main"]
+  
+  searxng:
+    image: searxng/searxng
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - BASE_URL=http://localhost:8080/
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge
