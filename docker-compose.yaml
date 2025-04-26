@@ -1,0 +1,12 @@
+services:
+  server:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      - ENV=production
+    env_file:
+      - ./.env
+    command: ["python3.12", "-m", "ci_agent.main"]
