@@ -42,4 +42,4 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
     print("Starting Agent API")
-    uvicorn.run("ci_agent.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("ci_agent.main:app", host="0.0.0.0", port=8080, reload=True)

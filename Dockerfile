@@ -22,4 +22,4 @@ RUN /root/.local/bin/poetry install --no-root
 COPY . .
 
 # Expose the FastAPI port
-EXPOSE 8000
+EXPOSE 8080
