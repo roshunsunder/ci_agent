@@ -50,14 +50,15 @@ def verify_sources(data_sources: list[str]):
         or not any(item not in DATA_SOURCES for item in data_sources)
     )
 
-@router.websocket("/ask/{user_id}")
+@router.websocket("/ask/{agent_id}")
 async def websocket_endpoint(
-        websocket: WebSocket, 
+        websocket: WebSocket,
+        agent_id: str, 
         user_id: str, 
         data_sources: list[str] = Query([]),
         start_date: str = Query(""),
-        stream: bool = Query(False),
-        active_connections = Depends(gen_deps)
+        stream: bool = Query(False), # TODO REMOVE ?
+        chat_session_manager = Depends(gen_deps)
     ):
     # Verify before accepting connection
     ent = await verify(websocket)
@@ -73,15 +74,20 @@ async def websocket_endpoint(
     
     try:
         # Only store connection if authentication successful
-        active_connections[user_id] = UserSession(
-            websocket=websocket,
-            agent=Agent(ent, start_date, data_sources),
-            streaming=stream
+        chat_session_manager.register_session(
+            user_id,
+            agent_id,
+            websocket
         )
-        print(active_connections)
+
+        chat_session_manager.register_agent(
+            user_id,
+            agent_id,
+            Agent(ent, start_date, data_sources)
+        )
         
         try:
-            user_session = active_connections[user_id]
+            user_session = chat_session_manager.get_session(user_id, agent_id)
             user_session.agent.init_data()
             await websocket.accept()
             for _ in range(user_session.agent.MAX_CHAT_TURNS):
@@ -98,12 +104,16 @@ async def websocket_endpoint(
                     await websocket.send_text(response)
         except WebSocketDisconnect:
             # Clean up connection
-            if user_id in active_connections:
-                del active_connections[user_id]
+            chat_session_manager.deregister_session(
+                user_id,
+                agent_id
+            )
                 
     except Exception as e:
         # Handle any other errors
-        if user_id in active_connections:
-            del active_connections[user_id]
+        chat_session_manager.deregister_session(
+                user_id,
+                agent_id
+            )
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
         raise e
