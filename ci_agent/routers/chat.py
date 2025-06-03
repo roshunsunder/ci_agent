@@ -3,13 +3,12 @@ from typing import Optional
 from ci_agent.agent import Agent
 from ci_agent.models.server_models import UserSession
 from ci_agent.utils.constants import DATA_SOURCES
+from ci_agent.main_deps import gen_deps
 from edgar import find
 from edgar.entities import CompanySearchResults
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
 router = APIRouter()
 
-# Store active connections
-active_connections = {}
 
 async def verify(websocket: WebSocket) -> Optional[str]:
     """Verify the authentication token from the connection request."""
@@ -57,13 +56,13 @@ async def websocket_endpoint(
         user_id: str, 
         data_sources: list[str] = Query([]),
         start_date: str = Query(""),
-        stream: bool = Query(False)
+        stream: bool = Query(False),
+        active_connections = Depends(gen_deps)
     ):
     # Verify before accepting connection
     ent = await verify(websocket)
     valid_date = verify_date(start_date)
     valid_sources = verify_sources(data_sources)
-
     if (
         not ent
         or not valid_sources
@@ -79,6 +78,7 @@ async def websocket_endpoint(
             agent=Agent(ent, start_date, data_sources),
             streaming=stream
         )
+        print(active_connections)
         
         try:
             user_session = active_connections[user_id]

@@ -1,9 +1,9 @@
 import nest_asyncio
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import Depends, FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from ci_agent.routers import agentconfig, auth, chat, search
-
+from ci_agent.main_deps import gen_deps
 load_dotenv("./.env")
 nest_asyncio.apply()
 
@@ -11,7 +11,7 @@ app = FastAPI(title="Competitive Intelligence Agent API", version="0.1.0")
 
 origins = [
     "http://localhost",
-    "http://localhost:5173",
+    "http://127.0.0.1:5173",
 ]
 
 app.add_middleware(
@@ -23,7 +23,7 @@ app.add_middleware(
 )
 
 # Routers
-app.include_router(search.router)
+app.include_router(search.router, dependencies=[Depends(gen_deps)])
 app.include_router(chat.router)
 app.include_router(agentconfig.router)
 app.include_router(auth.router)
