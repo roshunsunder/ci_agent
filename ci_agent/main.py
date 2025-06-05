@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from ci_agent.routers import agentconfig, auth, chat, search
-from ci_agent.main_deps import gen_deps
+from ci_agent.dependencies import gen_deps
 load_dotenv("./.env")
 nest_asyncio.apply()
 

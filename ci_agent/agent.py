@@ -389,26 +389,6 @@ class Agent:
                 )
             case _:
                 raise ValueError("Unrecognized filing type")
-                
-    def init_data(self):
-        for source in self.data_sources:
-            dates = self.dates_available(source)
-            print(f"Dates available for {source}: ", dates)
-            filings = self.ent.get_filings(form=source).filter(date=f"{self.start_date}:{str(datetime.date.today())}")
-            for filing in filings:
-                f = filing.obj()
-                if str(f.filing_date) not in dates:
-                    print(f"Couldn't find {str(f.filing_date)} in database")
-                    # Process
-                    params = {
-                        "ent" : self.ent,
-                        "filing" : f,
-                        "summary_generation_function" : self.generate_summary,
-                        "source_type" : source,
-                        "rewrite_summaries" : False
-                    }
-                    self._handler_dispatcher(source_type=source, params=params)
-        print("LOADED SOURCES")
     
     def check_for_missing_data(self):
         """Checks for missing filing dates in the database and returns a list of missing entries with detailed info."""
