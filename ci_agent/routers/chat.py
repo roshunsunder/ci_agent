@@ -1,12 +1,13 @@
 from datetime import date, datetime
 from typing import Optional
 from ci_agent.agent import Agent
-from ci_agent.models.server_models import UserSession
+from ci_agent.dependencies import agents_table
 from ci_agent.utils.constants import DATA_SOURCES
 from ci_agent.main_deps import gen_deps
 from edgar import find
 from edgar.entities import CompanySearchResults
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
+from botocore.exceptions import ClientError
 router = APIRouter()
 
 
@@ -53,24 +54,26 @@ def verify_sources(data_sources: list[str]):
 @router.websocket("/ask/{agent_id}")
 async def websocket_endpoint(
         websocket: WebSocket,
-        agent_id: str, 
-        user_id: str, 
-        data_sources: list[str] = Query([]),
-        start_date: str = Query(""),
-        stream: bool = Query(False), # TODO REMOVE ?
+        agent_id: str,
+        user_id: str,
         chat_session_manager = Depends(gen_deps)
     ):
-    # Verify before accepting connection
-    ent = await verify(websocket)
-    valid_date = verify_date(start_date)
-    valid_sources = verify_sources(data_sources)
-    if (
-        not ent
-        or not valid_sources
-        or not valid_date
-    ):
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+    # Attempt to retrieve agent information
+    try:
+        response = agents_table.get_item(Key={
+            'id': agent_id,
+            'user_id': user_id
+        })
+        agent_info = response.get('Item')
+        ent = find(agent_info['ent_id'])
+        start_date = agent_info['start_date']
+        data_sources = agent_info['data_sources']
+        if not agent_info:
+            print(f"No item found with id: {agent_id}")
+            return None
+    except ClientError as e:
+        print(f"Error getting item: {e.response['Error']['Message']}")
+        return None
     
     try:
         # Only store connection if authentication successful
@@ -80,7 +83,7 @@ async def websocket_endpoint(
             websocket
         )
 
-        chat_session_manager.register_agent(
+        chat_session_manager.assign_agent(
             user_id,
             agent_id,
             Agent(ent, start_date, data_sources)
@@ -88,6 +91,8 @@ async def websocket_endpoint(
         
         try:
             user_session = chat_session_manager.get_session(user_id, agent_id)
+
+            # Check for missing data
             user_session.agent.init_data()
             await websocket.accept()
             for _ in range(user_session.agent.MAX_CHAT_TURNS):
