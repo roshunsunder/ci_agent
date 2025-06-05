@@ -11,6 +11,7 @@ app = FastAPI(title="Competitive Intelligence Agent API", version="0.1.0")
 
 origins = [
     "http://localhost",
+    "http://127.0.0.1",
     "http://127.0.0.1:5173",
 ]
 

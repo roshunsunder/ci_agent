@@ -409,6 +409,45 @@ class Agent:
                     }
                     self._handler_dispatcher(source_type=source, params=params)
         print("LOADED SOURCES")
+    
+    def check_for_missing_data(self):
+        """Checks for missing filing dates in the database and returns a list of missing entries with detailed info."""
+        missing_data = []
+        for source in self.data_sources:
+            dates = self.dates_available(source)
+            print(f"Dates available for {source}: ", dates)
+            filings = self.ent.get_filings(form=source).filter(date=f"{self.start_date}:{str(datetime.date.today())}")
+            for filing in filings:
+                f = filing.obj()
+                filing_date_str = str(f.filing_date)
+                if filing_date_str not in dates:
+                    print(f"Couldn't find {filing_date_str} in database")
+                    missing_data.append({
+                        "source": source,
+                        "filing_date": filing_date_str,
+                        "filing_obj": f,
+                        "raw_filing": filing
+                    })
+        return missing_data
+    
+    def fill_missing_data(self, missing_data):
+        """Fills in the missing data by dispatching processing for each missing filing."""
+        for entry in missing_data:
+            source = entry["source"]
+            f = entry["filing_obj"]
+
+            params = {
+                "ent": self.ent,
+                "filing": f,
+                "summary_generation_function": self.generate_summary,
+                "source_type": source,
+                "rewrite_summaries": False
+            }
+
+            print(f"Processing missing filing: source={source}, date={entry['filing_date']}")
+            self._handler_dispatcher(source_type=source, params=params)
+
+        print("LOADED SOURCES")
 
 
 if __name__ == "__main__":

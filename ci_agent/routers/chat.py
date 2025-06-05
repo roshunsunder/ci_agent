@@ -90,11 +90,24 @@ async def websocket_endpoint(
         )
         
         try:
+            await websocket.accept()
             user_session = chat_session_manager.get_session(user_id, agent_id)
 
             # Check for missing data
-            user_session.agent.init_data()
-            await websocket.accept()
+            missing_data = user_session.agent.check_for_missing_data()
+            if missing_data:
+                payload = [
+                    {
+                    "source" : entry["source"], 
+                    "filing_date": entry["filing_date"]
+                    }
+                for entry in missing_data]
+
+                await websocket.send_json({
+                    "MESSAGE_TYPE" : "SERVER_MESSAGE",
+                    "MESSAGE_SUBTYPE": "MISSING_DATA",
+                    "PAYLOAD": payload
+                })
             for _ in range(user_session.agent.MAX_CHAT_TURNS):
                 # Handle incoming messages
                 data = await websocket.receive_text()
